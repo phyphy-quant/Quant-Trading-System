@@ -9,11 +9,10 @@ class DataSubscriber:
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis = None
-        self.active_channels = {}
-        self.kline_last_process_time = {}
-        # choose the sub channel
-        self.current_channel = None
-    
+        
+        # 透過 cta_strategy.yaml 設定或直接硬編
+        self.cta_symbol = "PERP_BTC_USDT"
+
     async def connect_to_redis(self):
         """Connect to Redis Server"""
         self.redis = await aioredis.from_url(
@@ -25,21 +24,19 @@ class DataSubscriber:
 
     async def subscribe_cta_channels(self):
         """
-        訂閱 CTA 策略會用到的 channels:
-         - cta_signals (策略可能會publish OPEN/CLOSE等signal)
-         - cta_executionreports (策略可能publish的成交回報、或是下單執行情況)
-        
-        之後持續接收訊息並印出。
+        訂閱:
+          1) cta_signals
+          2) cta_executionreports
+          3) [PD]position
         """
         if not self.redis:
             await self.connect_to_redis()
 
-        # 你在 cta_strategy.yaml 裡設定:
-        #  channels:
-        #    signal_channel: "cta_signals"
-        #    execution_report_channel: "cta_executionreports"
-        # 所以我們就訂閱以下兩個:
-        cta_channels = ["cta_signals", "cta_executionreports"]
+        cta_channels = [
+            "cta_signals",
+            "cta_executionreports",
+            "[PD]position"   # 私有頻道 position
+        ]
         
         pubsub = self.redis.pubsub()
         await pubsub.subscribe(*cta_channels)
@@ -48,30 +45,55 @@ class DataSubscriber:
         try:
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True)
-                if message is not None:
+                if message is not None and message["type"] == "message":
                     channel = message["channel"]
                     data = message["data"]
 
-                    # 如果只是 test ping / subscribe 事件，可以忽略
-                    if message["type"] != "message":
-                        continue
+                    # 首先，只在「我們關心的channel」才做進一步處理
+                    # cta_signals / cta_executionreports / [PD]position
+                    if channel == "cta_signals":
+                        # 先印channel & raw data
+                        print(f"\n=== [CTA Subscriber] 收到訊息 ===")
+                        print(f"Channel: {channel}")
+                        print(f"Raw Data: {data}")
+                        print("----------------------------------")
 
-                    # 印出我們收到的訊息
-                    print(f"\n=== [CTA Subscriber] 收到訊息 ===")
-                    print(f"Channel: {channel}")
-                    print(f"Raw Data: {data}")
-                    print("----------------------------------")
-
-                    # 假設 CTA Strategy publish 出的 signal 可能是 JSON
-                    # 我們可以嘗試解析並印出更細節
-                    try:
-                        parsed = json.loads(data)
-                        if channel == "cta_signals":
+                        try:
+                            parsed = json.loads(data)
                             await self.process_cta_signal(parsed)
-                        elif channel == "cta_executionreports":
+                        except json.JSONDecodeError:
+                            print("無法 JSON 解析，原始資料：", data)
+
+                    elif channel == "cta_executionreports":
+                        # 同樣處理
+                        print(f"\n=== [CTA Subscriber] 收到訊息 ===")
+                        print(f"Channel: {channel}")
+                        print(f"Raw Data: {data}")
+                        print("----------------------------------")
+
+                        try:
+                            parsed = json.loads(data)
                             await self.process_cta_execution_report(parsed)
-                    except json.JSONDecodeError:
-                        print("無法 JSON 解析，原始資料：", data)
+                        except json.JSONDecodeError:
+                            print("無法 JSON 解析，原始資料：", data)
+
+                    elif channel == "[PD]position":
+                        # 改良: 先解析 => 若有包含 cta_symbol 才印
+                        try:
+                            parsed = json.loads(data)
+                            if self.should_print_position(parsed):
+                                # 符合 symbol => 再顯示
+                                print(f"\n=== [CTA Subscriber] 收到訊息 ===")
+                                print(f"Channel: {channel}")
+                                print(f"Raw Data: {data}")
+                                print("----------------------------------")
+                                await self.process_position_update(parsed)
+                            else:
+                                # 不印任何東西
+                                pass
+                        except json.JSONDecodeError:
+                            # 如果 JSON 解析失敗，也不印原始資料
+                            pass
 
                 await asyncio.sleep(0.1)
 
@@ -82,53 +104,66 @@ class DataSubscriber:
         except Exception as e:
             print(f"Error in CTA subscription: {e}")
 
+    # -----------------------------
+    #  Signals / ExecReport handlers
+    # -----------------------------
     async def process_cta_signal(self, signal_dict: dict):
-        """
-        針對 CTA Strategy 發出來的 signal (action=OPEN/CLOSE) 做處理或印出
-        signal 內容範例:
-          {
-            "timestamp": 1697522220000,
-            "action": "OPEN",
-            "side": "BUY",               # 單向模式
-            "order_type": "MARKET",
-            "symbol": "PERP_BTC_USDT",
-            "quantity": 0.01,
-            ...
-          }
-          或者 (Hedge 模式)
-          {
-            "timestamp": 1697522220000,
-            "action": "OPEN",
-            "position_side": "LONG",
-            ...
-          }
-        """
         print("[CTA Signal] 解析後資料:")
         for k, v in signal_dict.items():
             print(f"  {k}: {v}")
 
     async def process_cta_execution_report(self, report_dict: dict):
-        """
-        針對 CTA Strategy 發出來的 execution report (若有) 做處理或印出
-        內容範例:
-          {
-            "timestamp": 1697522221000,
-            "action": "EXEC_REPORT",
-            "order_id": "...",
-            "status": "FILLED",
-            ...
-          }
-        """
         print("[CTA ExecReport] 解析後資料:")
         for k, v in report_dict.items():
             print(f"  {k}: {v}")
 
-# 如果需要，也可以保留你原本 DataSubscriber 其它方法 (process_kline_data, process_trade_data...) 在這裏
+    # -----------------------------
+    #  Position handler
+    # -----------------------------
+    def should_print_position(self, position_dict: dict) -> bool:
+        """
+        檢查 position 資訊中是否包含 self.cta_symbol
+        position_dict 結構可能是：
+          {
+            "topic": "position",
+            "ts": 1735632720684,
+            "data": {
+              "positions": {
+                 "PERP_BTC_USDT": {...},
+                 "PERP_ETH_USDT": {...}
+              }
+            }
+          }
+        如果 positions 裡沒有 self.cta_symbol，就返回 False
+        """
+        data = position_dict.get("data", {})
+        positions = data.get("positions", {})
+        # 如果 symbol not in positions => False
+        return self.cta_symbol in positions
+
+    async def process_position_update(self, position_dict: dict):
+        """
+        只針對包含 self.cta_symbol 的 position 資訊做印出
+        """
+        data = position_dict.get("data", {})
+        positions_dict = data.get("positions", {})
+        # 取出 symbol
+        sym_position = positions_dict.get(self.cta_symbol, {})
+
+        print(f"[CTA Subscriber] position update for {self.cta_symbol}")
+        for k, v in sym_position.items():
+            print(f"  {k}: {v}")
+
+        holding = float(sym_position.get("holding", 0.0))
+        if holding > 0:
+            print(f"  => LONG position={holding}")
+        elif holding < 0:
+            print(f"  => SHORT position={holding}")
+        else:
+            print("  => FLAT / no position")
 
 async def main():
-    # 初始化訂閱器
     subscriber = DataSubscriber(redis_host="localhost", redis_port=6379)
-    # 直接訂閱 CTA channels (cta_signals / cta_executionreports)
     await subscriber.subscribe_cta_channels()
 
 if __name__ == "__main__":
