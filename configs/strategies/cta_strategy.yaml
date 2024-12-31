@@ -1,0 +1,29 @@
+trading_params:
+  symbol: "PERP_BTC_USDT"
+  timeframe: "5m"
+  position_size: 0.053
+  max_records: 500
+  tick_size : 1.0
+  hedge_mode: false  # true 為 Hedge / false 為 One way 
+
+subscription_params:
+  symbol: "PERP_BTC_USDT"
+  market_config:
+    kline: true
+    orderbook: false
+    bbo: false
+    trade: false
+    
+  private_config:
+    executionreport: true
+    position: false
+    balance: false
+
+channels:
+  signal_channel: "cta_signals"
+  execution_report_channel: "cta_executionreports"
+
+risk_params:
+  max_position_size: 0.1
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.30

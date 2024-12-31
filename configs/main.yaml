@@ -1,0 +1,18 @@
+exchange:
+  app_id : "460c97db-f51d-451c-a23e-3cce56d4c932"
+  api_key : 'sdFgbf5mnyDD/wahfC58Kw=='
+  api_secret : 'FWQGXZCW4P3V4D4EN4EIBL6KLTDA'
+  market_url: "wss://wss.staging.woox.io/ws/stream"
+
+risk_management:
+  max_position_size: None
+  max_drawdown: 0.25
+  max_daily_loss: 125
+  max_leverage: 10
+
+redis:
+  host: "localhost"
+  port: 6379
+
+signal_channel: "trading_signals"
+execution_channel: "execution_reports"
