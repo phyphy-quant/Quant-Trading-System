@@ -1,7 +1,7 @@
 trading_params:
   symbol: "PERP_BTC_USDT"
-  timeframe: "5m"
-  position_size: 0.053
+  timeframe: "1m"
+  position_size: 0.001
   max_records: 500
   tick_size : 1.0
   hedge_mode: false  # true 為 Hedge / false 為 One way 
@@ -16,7 +16,7 @@ subscription_params:
     
   private_config:
     executionreport: true
-    position: false
+    position: true
     balance: false
 
 channels:
